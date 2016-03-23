@@ -3,7 +3,7 @@
 //  ImageCache
 //
 //  Created by Paresh Navadiya on 16/03/2016.
-//  Copyright (c) 2013 Paresh Navadiya. All rights reserved.
+//  Copyright (c) 2016 Paresh Navadiya. All rights reserved.
 //
 
 #import <Foundation/Foundation.h>
