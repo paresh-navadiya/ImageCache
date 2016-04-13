@@ -156,6 +156,8 @@ BLOCK(); \
     if(self) {
         _fileExpirationInterval = ImageCache_DEFAULT_EXPIRATION_INTERVAL;
         _imageCache = [[NSCache alloc] init];
+        _imageCache.totalCostLimit = 50 * (1024 * 1024); //50MB
+        
         _maxNumberOfRetries = 0;
         _retryDelay = 0.0;
         
@@ -195,45 +197,108 @@ BLOCK(); \
     }
 }
 
-- (void)imageForURL:(NSString *)url completion:(void (^)(UIImage *image))completion {
-    NSAssert(url.length > 0, @"url cannot be nil");
-    __weak ImageCache *weakSelf = self;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSString *sha1 = [url jgaf_sha1];
-        UIImage *image = [weakSelf.imageCache objectForKey:sha1];
-        if(image == nil) {
-            image = [weakSelf imageFromDiskForKey:sha1];
-        }
-        
-
-        if(image == nil) {
-            
-            NSArray<NSURLSessionOperation *> *allCurOperations = self.operationQueue.operations.copy;
-            
-            NSURLSessionOperation *operationWithRequest = nil;
-            for (NSURLSessionOperation *operation in allCurOperations) {
-                
-                NSString *strRequestURL = [operation.task.originalRequest.URL absoluteString];
-                NSString *strCurRequestURL = [operation.task.currentRequest.URL absoluteString];
-                if ([strRequestURL isEqualToString:url] || [strCurRequestURL isEqualToString:url]) {
-                    operationWithRequest = operation;
-                    break;
-                }
-                
+- (void)imageForStringURL:(NSString *)url completion:(void (^)(UIImage *image, NSURL * __nullable imgURL))completion {
+    NSAssert(url.length > 0, @"url string cannot be nil");
+    
+    if(![url isKindOfClass:[NSNull class]] && url)
+    {
+        __weak ImageCache *weakSelf = self;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSString *sha1 = [url jgaf_sha1];
+            UIImage *image = [weakSelf.imageCache objectForKey:sha1];
+            if(image == nil) {
+                image = [weakSelf imageFromDiskForKey:sha1];
             }
             
-            if (!operationWithRequest)
-                [weakSelf loadRemoteImageForURL:url key:sha1 retryCount:0 completion:completion];
-            else
-                [operationWithRequest start];
+            
+            if(image == nil) {
                 
-        }
-        else if(completion) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(image);
-            });
-        }
-    });
+                NSArray<NSURLSessionOperation *> *allCurOperations = self.operationQueue.operations.copy;
+                
+                NSURLSessionOperation *operationWithRequest = nil;
+                for (NSURLSessionOperation *operation in allCurOperations) {
+                    
+                    NSString *strRequestURL = [operation.task.originalRequest.URL absoluteString];
+                    NSString *strCurRequestURL = [operation.task.currentRequest.URL absoluteString];
+                    if ([strRequestURL isEqualToString:url] || [strCurRequestURL isEqualToString:url]) {
+                        operationWithRequest = operation;
+                        break;
+                    }
+                    
+                }
+                
+                if (!operationWithRequest)
+                    [weakSelf loadRemoteImageForURL:url key:sha1 retryCount:0 completion:completion];
+                else
+                    [operationWithRequest start];
+                
+            }
+            else if(completion) {
+                
+                __block NSURL *curURL = [NSURL URLWithString:url];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion(image,curURL);
+                });
+            }
+        });
+    }
+    else
+    {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(nil,nil);
+        });
+    }
+}
+
+- (void)imageForURL:(nonnull NSURL *)imageURL completion:(void (^)(UIImage *image, NSURL * __nullable imgURL))completion {
+    
+    if (imageURL) {
+        __weak ImageCache *weakSelf = self;
+        NSString *url = [imageURL absoluteString];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSString *sha1 = [url jgaf_sha1];
+            UIImage *image = [weakSelf.imageCache objectForKey:sha1];
+            if(image == nil) {
+                image = [weakSelf imageFromDiskForKey:sha1];
+            }
+            
+            
+            if(image == nil) {
+                
+                NSArray<NSURLSessionOperation *> *allCurOperations = self.operationQueue.operations.copy;
+                
+                NSURLSessionOperation *operationWithRequest = nil;
+                for (NSURLSessionOperation *operation in allCurOperations) {
+                    
+                    NSString *strRequestURL = [operation.task.originalRequest.URL absoluteString];
+                    NSString *strCurRequestURL = [operation.task.currentRequest.URL absoluteString];
+                    if ([strRequestURL isEqualToString:url] || [strCurRequestURL isEqualToString:url]) {
+                        operationWithRequest = operation;
+                        break;
+                    }
+                    
+                }
+                
+                if (!operationWithRequest)
+                    [weakSelf loadRemoteImageForURL:url key:sha1 retryCount:0 completion:completion];
+                else
+                    [operationWithRequest start];
+                
+            }
+            else if(completion) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion(image,imageURL);
+                });
+            }
+        });
+    }
+    else
+    {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(nil,nil);
+        });
+    }
+    
 }
 
 - (UIImage *)imageFromDiskForKey:(NSString *)key {
@@ -246,7 +311,8 @@ BLOCK(); \
             [fileManager setAttributes:@{NSFileModificationDate:[NSDate date]} ofItemAtPath:filePath error:NULL];
             image = [[self class] imageWithData:[fileManager contentsAtPath:filePath]];
             if (image) {
-                [_imageCache setObject:image forKey:key];
+                NSUInteger cost = (image.size.width * image.size.height) * 4;
+                [_imageCache setObject:image forKey:key cost:cost];
             }
         }
     }
@@ -258,7 +324,7 @@ BLOCK(); \
     return image;
 }
 
-- (void)loadRemoteImageForURL:(NSString *)url key:(NSString *)key retryCount:(NSInteger)retryCount completion:(void (^)(UIImage *image))completion {
+- (void)loadRemoteImageForURL:(NSString *)url key:(NSString *)key retryCount:(NSInteger)retryCount completion:(void (^)(UIImage *__nullable image,NSURL * __nullable imgURL))completion {
     //NSLog(@"%@",url);
     if (url.length > 0) {
         NSURLRequest *urlRequest = [NSURLRequest requestWithURL:[NSURL URLWithString:url]];
@@ -292,7 +358,7 @@ BLOCK(); \
                             
                             if(completion) {
                                 dispatch_async(dispatch_get_main_queue(), ^{
-                                    completion(image);
+                                    completion(image,response.URL);
                                 });
                             }
                         });
@@ -304,7 +370,7 @@ BLOCK(); \
                             //out of retries or got a 400 level error so don't retry
                             if(completion) {
                                 dispatch_async(dispatch_get_main_queue(), ^{
-                                    completion(nil);
+                                    completion(nil,response.URL);
                                 });
                             }
                         }
@@ -340,7 +406,7 @@ BLOCK(); \
         [imgDownloadOperation start];
     }
     else if(completion) {
-        completion(nil);
+        completion(nil,nil);
     }
 }
 

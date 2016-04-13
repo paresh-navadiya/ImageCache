@@ -29,7 +29,8 @@
 @property (assign, nonatomic) NSTimeInterval retryDelay;
 
 + (nonnull ImageCache *)sharedInstance;
-- (void)imageForURL:(nonnull NSString *)url completion:(void (^ __nullable)( UIImage * __nullable image))completion;
+- (void)imageForStringURL:(nonnull NSString *)url completion:(void (^ __nullable)( UIImage * __nullable image, NSURL * __nullable imgURL))completion;
+- (void)imageForURL:(nonnull NSURL *)imageURL completion:(void (^ __nullable)( UIImage * __nullable image, NSURL * __nullable imgURL))completion;
 - (void)clearAllData;
 
 @end
